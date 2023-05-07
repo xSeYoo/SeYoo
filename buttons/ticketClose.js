@@ -1,115 +1,70 @@
 const {
-    Client,
-    ChatInputCommandInteraction,
-    EmbedBuilder,
-    ChannelType,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-  } = require("discord.js");
-  const { Types } = require("mongoose");
-  
-  const ticketSchema = require("../schemas/ticketSchema");
-  const userSchema = require("../schemas/userSchema");
-  
-  const { createTranscript } = require("discord-html-transcripts");
-  
-  module.exports = {
-    id: 'ticket-close',
-    permissions: [],
-    run: async (client, interaction) => {
-      const { channel, member, guild, customId } = interaction;
-      const ticketsData = await ticketSchema.findOne({
-        guildId: guild.id,
-      });
-      const usersData = await userSchema.findOne({
-        guildId: guild.id,
-        ticketId: channel.id,
-      });
-  
-      if (!member.roles.cache.find((r) => r.id === ticketsData.supportId)) {
-        return await interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setColor("Red")
-              .setDescription(`You're not allowed to use this button.`),
-          ],
-          ephemeral: true,
-        });
+  Client,
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require("discord.js");
+const { Types } = require("mongoose");
+
+const ticketSchema = require("../schemas/ticketSchema");
+const userSchema = require("../schemas/userSchema");
+
+const { createTranscript } = require("discord-html-transcripts");
+
+module.exports = {
+  id: 'ticket-close',
+  permissions: [],
+  run: async (client, interaction) => {
+    const { guild, member, customId, channel } = interaction;
+    const { ManageChannels, SendMessages } = PermissionFlagsBits;
+    if (!interaction.isButton()) return;
+    if (!['ticket-close', 'ticket-lock', 'ticket-unlock', 'ticket-manage', 'ticket-claim'].includes(customId)) return;
+    const docs = await TicketSetup.findOne({ GuildID: guild.id });
+    if (!docs) return;
+    const errorEmbed = new EmbedBuilder().setColor('Red').setDescription(config.ticketError);
+    if (!guild.members.me.permissions.has((r) => r.id === docs.Handlers)) return interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(error => { return });
+    const nopermissionsEmbed = new EmbedBuilder().setColor('Red').setDescription(config.ticketNoPermissions);
+    const alreadyEmbed = new EmbedBuilder().setColor('Orange');
+    TicketSchema.findOne({ GuildID: guild.id, ChannelID: channel.id }, async (err, data) => {
+      if (err) throw err;
+      if (!data) return;
+      await guild.members.cache.get(data.MemberID);
+      await guild.members.cache.get(data.OwnerID);
+      if ((!member.permissions.has(ManageChannels)) & (!member.roles.cache.has(docs.Handlers))) return interaction.reply({ embeds: [nopermissionsEmbed], ephemeral: true }).catch(error => { return });
+      const transcript = await createTranscript(channel, {
+        limit: -1,
+        returnType: 'attachment',
+        saveImages: true,
+        poweredBy: false,
+        filename: config.ticketName + data.TicketID + '.html',
+      }).catch(error => { return });
+      let claimed = undefined;
+      if (data.Claimed === true) {
+        claimed = '\✅'
       }
-  
-      if (usersData.closed === true)
-        return await interaction.reply({
-          embeds: [
-            new EmbedBuilder().setDescription("The ticket is already closed.").setColor("0x2F3136")
-          ]
-        });
-  
-      await userSchema.updateMany(
-        {
-          ticketId: channel.id,
-        },
-        {
-          closed: true,
-          closer: member.id,
-        }
-      );
-  
-      if (!usersData.closer == member.id)
-        return await interaction.reply({
-          embeds: [
-            new EmbedBuilder().setDescription("You are not the user that closed this ticket!").setColor("Red")
-          ],
-          ephemeral: true,
-        });
-  
-      client.channels.cache
-        .get(usersData.ticketId)
-        .permissionOverwrites.edit(usersData.creatorId, {
-          ViewChannel: false,
-        });
-  
-      await interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor("Blue")
-            .setTitle("Ticket Closed")
-            .setDescription(
-              "The ticket has been closed, the user who created this ticket cannot see it now!"
-            )
-            .addFields(
-              {
-                name: "Ticket Creator",
-                value: `<@${usersData.creatorId}> created this ticket.`,
-              },
-              {
-                name: "Ticket Closer",
-                value: `<@${member.user.id}> closed this ticket.`,
-              },
-              {
-                name: "Closed at",
-                value: `${new Date().toLocaleString()}`,
-              }
-            )
-            .setFooter({
-              text: `${client.user.tag} by www.lunarcodes.org`,
-              iconURL: client.user.displayAvatarURL(),
-            }),
-        ],
-        components: [
-          new ActionRowBuilder().setComponents(
-            new ButtonBuilder()
-              .setCustomId("reopenTicket")
-              .setEmoji("🔓")
-              .setLabel("Reopen")
-              .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-              .setCustomId("deleteTicket")
-              .setEmoji("⛔")
-              .setLabel("Delete")
-              .setStyle(ButtonStyle.Danger)
-          ),
-        ],
-      });
-    }
+      if (data.Claimed === false) {
+        claimed = '\❌'
+      }
+      if (data.ClaimedBy === undefined) {
+        data.ClaimedBy = '\❌'
+      } else {
+        data.ClaimedBy = '<@' + data.ClaimedBy + '>'
+      }
+      const transcriptTimestamp = Math.round(Date.now() / 1000)
+      const transcriptEmbed = new EmbedBuilder()
+        .setDescription(`${config.ticketTranscriptMember} <@${data.OwnerID}>\n${config.ticketTranscriptTicket} ${data.TicketID}\n${config.ticketTranscriptClaimed} ${claimed}\n${config.ticketTranscriptModerator} ${data.ClaimedBy}\n${config.ticketTranscriptTime} <t:${transcriptTimestamp}:R> (<t:${transcriptTimestamp}:F>)`)
+      const closingTicket = new EmbedBuilder().setTitle(config.ticketCloseTitle).setDescription(config.ticketCloseDescription).setColor('Red')
+      await guild.channels.cache.get(docs.Transcripts).send({
+        embeds: [transcriptEmbed],
+        files: [transcript],
+      }).catch(error => { return });
+      interaction.deferUpdate().catch(error => { return });
+      channel.send({ embeds: [closingTicket] }).catch(error => { return });
+      await TicketSchema.findOneAndDelete({ GuildID: guild.id, ChannelID: channel.id });
+      setTimeout(() => { channel.delete().catch(error => { return }); }, 5000);
+    })
   }
+}
